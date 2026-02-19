@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: food_delivery_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-food_delivery}
+      MYSQL_USER: ${MYSQL_USER:-food_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-food_password}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    networks:
+      - food_delivery_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Django Auth Service
+  django_auth:
+    build: ./django_auth_service
+    container_name: food_delivery_django
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-food_delivery}
+      MYSQL_USER: ${MYSQL_USER:-food_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-food_password}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-secret-key}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-True}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,django_auth}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-jwt-secret-key}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS:-7}
+    volumes:
+      - ./django_auth_service:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - food_delivery_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/admin/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # FastAPI Core Service
+  fastapi_core:
+    build: ./fastapi_core_service
+    container_name: food_delivery_fastapi
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-food_delivery}
+      MYSQL_USER: ${MYSQL_USER:-food_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-food_password}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-jwt-secret-key}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      FASTAPI_DEBUG: ${FASTAPI_DEBUG:-True}
+    volumes:
+      - ./fastapi_core_service:/app
+    ports:
+      - "8001:8001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - food_delivery_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # React Frontend
+  react_frontend:
+    build: ./frontend-react
+    container_name: food_delivery_react
+    ports:
+      - "3000:80"
+    depends_on:
+      - django_auth
+      - fastapi_core
+    networks:
+      - food_delivery_network
+
+  # Nginx Reverse Proxy
+  nginx:
+    build: ./nginx
+    container_name: food_delivery_nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - django_auth
+      - fastapi_core
+      - react_frontend
+    networks:
+      - food_delivery_network
+
+volumes:
+  mysql_data:
+
+networks:
+  food_delivery_network:
+    driver: bridge
